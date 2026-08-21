@@ -160,6 +160,10 @@ android {
 
 Commit every new `schemas/<version>.json` alongside the version bump so `MigrationTestHelper` can validate the upgrade path in CI.
 
+### Termux host builds
+
+When Gradle runs with the Termux JDK, the build extracts Room's Android-compatible SQLite JDBC library into the Termux temp directory before KSP runs. This avoids the glibc-only native library selected by default; no extra command-line flags are required.
+
 ### SQLCipher passphrase
 
 The passphrase is injected at `AppDatabase` construction time by `CryptoManager.databasePassphrase()`. No plaintext passphrase appears in source code or configuration files — it is generated once per device, encrypted with the Android Keystore, and stored in `SharedPreferences`.
