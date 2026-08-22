@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.VpnKeyOff
 import androidx.compose.material.icons.filled.VpnLock
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -77,6 +78,7 @@ fun WebViewControlCenter(
     onLockChanged: (Boolean) -> Unit,
     onClearData: () -> Unit,
     onNetworkLogClick: () -> Unit,
+    onContentProtectionChanged: (Boolean) -> Unit = {},
     onNewTorIdentity: () -> Unit = {},
     onPanic: () -> Unit = {},
     isReadingModeActive: Boolean = false,
@@ -113,6 +115,7 @@ fun WebViewControlCenter(
                 onTranslateChanged = onTranslateChanged,
                 onFullscreenChanged = onFullscreenChanged,
                 onLockChanged = onLockChanged,
+                onContentProtectionChanged = onContentProtectionChanged,
                 onClearData = { showSheet = false; onClearData() },
                 onNetworkLogClick = { showSheet = false; onNetworkLogClick() },
                 onNewTorIdentity = { showSheet = false; onNewTorIdentity() },
@@ -135,6 +138,7 @@ fun WebViewControlCenterSheet(
     onLockChanged: (Boolean) -> Unit,
     onClearData: () -> Unit,
     onNetworkLogClick: () -> Unit,
+    onContentProtectionChanged: (Boolean) -> Unit = {},
     onNewTorIdentity: () -> Unit = {},
     onPanic: () -> Unit = {},
     isReadingModeActive: Boolean = false,
@@ -231,6 +235,18 @@ fun WebViewControlCenterSheet(
         headlineContent = { Text(stringResource(R.string.webview_control_adblock)) },
         trailingContent = {
             Switch(checked = pwaApp.adBlockEnabled, onCheckedChange = onAdBlockChanged)
+        },
+    )
+    HorizontalDivider(modifier = Modifier.padding(horizontal = Dimens.spaceLg))
+    ListItem(
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+        leadingContent = { Icon(Icons.Default.VisibilityOff, null) },
+        headlineContent = { Text(stringResource(R.string.webview_control_content_protection)) },
+        trailingContent = {
+            Switch(
+                checked = pwaApp.contentProtection.enabled,
+                onCheckedChange = onContentProtectionChanged,
+            )
         },
     )
     HorizontalDivider(modifier = Modifier.padding(horizontal = Dimens.spaceLg))

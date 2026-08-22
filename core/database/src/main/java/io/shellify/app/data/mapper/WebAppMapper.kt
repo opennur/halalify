@@ -1,6 +1,7 @@
 package io.shellify.app.data.mapper
 
 import io.shellify.app.data.local.entity.WebAppEntity
+import io.shellify.app.domain.model.ContentProtectionSettings
 import io.shellify.app.domain.model.EngineType
 import io.shellify.app.domain.model.IconSource
 import io.shellify.app.domain.model.LockType
@@ -51,6 +52,19 @@ fun WebAppEntity.toDomain(): WebApp = WebApp(
     trackerBlockingEnabled = trackerBlockingEnabled,
     useTor = useTor,
     preserveTorIdentity = preserveTorIdentity,
+    contentProtection = ContentProtectionSettings(
+        enabled = contentProtectionEnabled,
+        blurImages = contentProtectionBlurImages,
+        blurVideos = contentProtectionBlurVideos,
+        blurAmount = contentProtectionBlurAmount,
+        grayscale = contentProtectionGrayscale,
+        strictness = contentProtectionStrictness,
+        blurMale = contentProtectionBlurMale,
+        blurFemale = contentProtectionBlurFemale,
+        startupBlur = contentProtectionStartupBlur,
+        hoverReveal = contentProtectionHoverReveal,
+        whitelist = contentProtectionWhitelist.split("\n").map(String::trim).filter(String::isNotEmpty),
+    ),
 )
 
 fun WebApp.toEntity(): WebAppEntity = WebAppEntity(
@@ -93,4 +107,15 @@ fun WebApp.toEntity(): WebAppEntity = WebAppEntity(
     trackerBlockingEnabled = trackerBlockingEnabled,
     useTor = useTor,
     preserveTorIdentity = preserveTorIdentity,
+    contentProtectionEnabled = contentProtection.enabled,
+    contentProtectionBlurImages = contentProtection.blurImages,
+    contentProtectionBlurVideos = contentProtection.blurVideos,
+    contentProtectionBlurAmount = contentProtection.blurAmount,
+    contentProtectionGrayscale = contentProtection.grayscale,
+    contentProtectionStrictness = contentProtection.strictness,
+    contentProtectionBlurMale = contentProtection.blurMale,
+    contentProtectionBlurFemale = contentProtection.blurFemale,
+    contentProtectionStartupBlur = contentProtection.startupBlur,
+    contentProtectionHoverReveal = contentProtection.hoverReveal,
+    contentProtectionWhitelist = contentProtection.whitelist.joinToString("\n"),
 )

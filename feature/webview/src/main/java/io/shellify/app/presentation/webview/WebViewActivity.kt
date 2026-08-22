@@ -828,6 +828,12 @@ class WebViewActivity : FragmentActivity() {
                         onLockChanged = { viewModel.onLockChanged(it) },
                         onClearData = { viewModel.onClearData() },
                         onNetworkLogClick = { showNetworkLog.value = true },
+                        onContentProtectionChanged = { on ->
+                            viewModel.onContentProtectionChanged(on)
+                            viewModel.uiState.value.app?.contentProtection?.let { settings ->
+                                engine.updateContentProtection(settings)
+                            }
+                        },
                         onNewTorIdentity = { viewModel.onNewTorIdentity() },
                         onPanic = { viewModel.executePanicWipe() },
                         isReadingModeActive = state.isReadingModeActive,
@@ -888,6 +894,7 @@ class WebViewActivity : FragmentActivity() {
                 engine.getView()?.visibility = if (viewModel.uiState.value.error == null) View.VISIBLE else View.INVISIBLE
                 hideSplash()
                 val app = viewModel.uiState.value.app ?: return
+                engine.updateContentProtection(app.contentProtection)
                 if (app.translateEnabled) {
                     engine.evaluateJavascript("window.__shellifyTranslateLoaded = false;", null)
                     val script = TranslateBridge.buildScript(

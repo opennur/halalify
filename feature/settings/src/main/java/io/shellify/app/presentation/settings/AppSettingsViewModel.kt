@@ -17,6 +17,7 @@ import io.shellify.app.core.security.verifyPassword
 import io.shellify.app.core.shortcut.PwaShortcutManager
 import io.shellify.app.core.shortcut.SvgIconRenderer
 import io.shellify.app.domain.model.EngineType
+import io.shellify.app.domain.model.ContentProtectionSettings
 import io.shellify.app.domain.model.IconSource
 import io.shellify.app.domain.model.LockType
 import io.shellify.app.domain.model.NotificationChannelId
@@ -172,6 +173,31 @@ class AppSettingsViewModel(
 
     fun toggleAlwaysIncognito() = update { it.copy(alwaysIncognito = !it.alwaysIncognito) }
     fun toggleTrackerBlocking() = update { it.copy(trackerBlockingEnabled = !it.trackerBlockingEnabled) }
+    fun toggleContentProtection() = updateContentProtection { it.copy(enabled = !it.enabled) }
+    fun toggleContentProtectionImages() = updateContentProtection { it.copy(blurImages = !it.blurImages) }
+    fun toggleContentProtectionVideos() = updateContentProtection { it.copy(blurVideos = !it.blurVideos) }
+    fun toggleContentProtectionGrayscale() = updateContentProtection { it.copy(grayscale = !it.grayscale) }
+    fun toggleContentProtectionBlurMale() = updateContentProtection { it.copy(blurMale = !it.blurMale) }
+    fun toggleContentProtectionBlurFemale() = updateContentProtection { it.copy(blurFemale = !it.blurFemale) }
+    fun toggleContentProtectionStartupBlur() = updateContentProtection { it.copy(startupBlur = !it.startupBlur) }
+    fun toggleContentProtectionHoverReveal() = updateContentProtection { it.copy(hoverReveal = !it.hoverReveal) }
+    fun setContentProtectionBlurAmount(value: Int) =
+        updateContentProtection { it.copy(blurAmount = value.coerceIn(0, 80)) }
+
+    fun setContentProtectionStrictness(value: Float) =
+        updateContentProtection { it.copy(strictness = value.coerceIn(0f, 1f)) }
+
+    fun setContentProtectionWhitelist(value: String) = updateContentProtection {
+        it.copy(
+            whitelist = value.lines()
+                .map(String::trim)
+                .filter(String::isNotEmpty)
+                .distinct()
+        )
+    }
+
+    private fun updateContentProtection(transform: (ContentProtectionSettings) -> ContentProtectionSettings) =
+        update { it.copy(contentProtection = transform(it.contentProtection)) }
     fun setTranslateTarget(lang: TranslateLanguage) =
         update { it.copy(translateTarget = lang) }
 

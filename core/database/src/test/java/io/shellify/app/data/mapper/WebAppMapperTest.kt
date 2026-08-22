@@ -1,6 +1,7 @@
 package io.shellify.app.data.mapper
 
 import io.shellify.app.data.local.entity.WebAppEntity
+import io.shellify.app.domain.model.ContentProtectionSettings
 import io.shellify.app.domain.model.EngineType
 import io.shellify.app.domain.model.IconSource
 import io.shellify.app.domain.model.LockType
@@ -332,5 +333,39 @@ class WebAppMapperTest {
         assertEquals(false, roundTripped.trackerBlockingEnabled)
         assertEquals(false, roundTripped.useTor)
         assertEquals(false, roundTripped.preserveTorIdentity)
+    }
+
+    @Test
+    fun `content protection defaults are enabled for new apps`() {
+        val settings = baseApp().contentProtection
+        assertTrue(settings.enabled)
+        assertTrue(settings.blurImages)
+        assertTrue(settings.blurVideos)
+        assertTrue(settings.grayscale)
+        assertTrue(settings.startupBlur)
+        assertTrue(settings.hoverReveal)
+        assertEquals(false, settings.blurMale)
+        assertTrue(settings.blurFemale)
+    }
+
+    @Test
+    fun `content protection settings survive entity round trip`() {
+        val settings = ContentProtectionSettings(
+            enabled = false,
+            blurImages = false,
+            blurVideos = true,
+            blurAmount = 35,
+            grayscale = false,
+            strictness = 0.8f,
+            blurMale = true,
+            blurFemale = false,
+            startupBlur = false,
+            hoverReveal = false,
+            whitelist = listOf("example.com", "trusted.example.org"),
+        )
+
+        val roundTripped = baseApp().copy(contentProtection = settings).toEntity().toDomain().contentProtection
+
+        assertEquals(settings, roundTripped)
     }
 }

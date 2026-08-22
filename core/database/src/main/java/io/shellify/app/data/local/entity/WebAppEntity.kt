@@ -71,4 +71,16 @@ data class WebAppEntity(
     // Tor
     @ColumnInfo(name = "use_tor") val useTor: Boolean = false,
     @ColumnInfo(name = "preserve_tor_identity") val preserveTorIdentity: Boolean = false,
+    // Local content protection
+    @ColumnInfo(name = "content_protection_enabled") val contentProtectionEnabled: Boolean = true,
+    @ColumnInfo(name = "content_protection_blur_images") val contentProtectionBlurImages: Boolean = true,
+    @ColumnInfo(name = "content_protection_blur_videos") val contentProtectionBlurVideos: Boolean = true,
+    @ColumnInfo(name = "content_protection_blur_amount") val contentProtectionBlurAmount: Int = 20,
+    @ColumnInfo(name = "content_protection_grayscale") val contentProtectionGrayscale: Boolean = true,
+    @ColumnInfo(name = "content_protection_strictness") val contentProtectionStrictness: Float = 0.5f,
+    @ColumnInfo(name = "content_protection_blur_male") val contentProtectionBlurMale: Boolean = false,
+    @ColumnInfo(name = "content_protection_blur_female") val contentProtectionBlurFemale: Boolean = true,
+    @ColumnInfo(name = "content_protection_startup_blur") val contentProtectionStartupBlur: Boolean = true,
+    @ColumnInfo(name = "content_protection_hover_reveal") val contentProtectionHoverReveal: Boolean = true,
+    @ColumnInfo(name = "content_protection_whitelist") val contentProtectionWhitelist: String = "",
 )

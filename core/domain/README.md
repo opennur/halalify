@@ -20,10 +20,14 @@ Every other module depends on `core:domain`, either to consume its models or to 
 
 | Class | Description |
 |---|---|
-| `WebApp` | Primary entity: `name`, `url`, `isolationId` (UUID), fullscreen flags, ad-block settings, translation config, `LockType`, `UserAgentMode`, theme colors, `EngineType` |
+| `WebApp` | Primary entity: `name`, `url`, `isolationId` (UUID), fullscreen flags, ad-block settings, translation config, `ContentProtectionSettings`, `LockType`, `UserAgentMode`, theme colors, `EngineType` |
 | `PwaManifest` | Parsed PWA manifest — icon list, display mode, colors; `bestIconUrl()` prefers maskable → any → largest |
 | `Category` | Groups of web apps: `id`, `name`, `color` |
 | `IconSource` | Sealed class: `Path(path)`, `SvgIcon(data, renderedPath)`, or `null` |
+
+`ContentProtectionSettings` is the pure-Kotlin per-app policy passed to either browser engine. It
+contains enablement, image/video coverage, blur amount, grayscale, strictness, subject targets,
+startup blur, hover reveal, and hostname whitelist settings.
 
 ### Enums
 

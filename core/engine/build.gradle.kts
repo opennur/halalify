@@ -23,6 +23,7 @@ android {
 
 dependencies {
     implementation(project(":core:domain"))
+    implementation(project(":core:webbridge"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.kotlinx.coroutines.android)

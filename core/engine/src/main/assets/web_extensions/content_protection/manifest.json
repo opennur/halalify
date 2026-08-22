@@ -1,0 +1,26 @@
+{
+  "manifest_version": 2,
+  "name": "Shellify Content Protection",
+  "version": "1.0.0",
+  "description": "Local media protection for Shellify browser sessions.",
+  "permissions": [
+    "<all_urls>",
+    "geckoViewAddons"
+  ],
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["human.js", "smart-detector.js", "content-script.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": ["models/*"],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "content-protection@shellify.app"
+    }
+  }
+}

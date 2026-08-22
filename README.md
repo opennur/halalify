@@ -53,6 +53,7 @@ SHA-1: 75:F2:73:AF:01:93:EF:08:F3:F2:2F:8C:B2:EA:FE:8B:BC:A0:27:73
 - **Translation** — In-page translation via Google Translate; configurable per app
 - **App lock** — Optional password or biometric lock per app or globally
 - **Privacy controls** — Always-incognito mode, cookie auto-wipe on exit, stealth recents, HTTPS enforcement per app
+- **Content protection** — Local face image/video detection with regional blur overlays, configurable grayscale, strictness, hover reveal, and per-host whitelists
 - **Panic button** — Long-press wipe in the control center: clears all sessions and deletes all apps
 - **Two browser engines** — Android System WebView (default) or Mozilla GeckoView (optional download)
 - **User-agent switching** — Chrome, Firefox, Safari, Edge, or custom user-agent per app

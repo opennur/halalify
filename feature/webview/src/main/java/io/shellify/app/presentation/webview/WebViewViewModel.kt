@@ -159,6 +159,14 @@ class WebViewViewModel(
         viewModelScope.launch { _commands.emit(WebViewCommand.LoadUrl(currentUrl)) }
     }
 
+    fun onContentProtectionChanged(on: Boolean) {
+        val updated = currentApp().copy(
+            contentProtection = currentApp().contentProtection.copy(enabled = on),
+        )
+        _uiState.update { it.copy(app = updated) }
+        viewModelScope.launch(Dispatchers.IO) { saveWebApp(updated) }
+    }
+
     fun onTranslateChanged(on: Boolean) {
         val updated = currentApp().copy(translateEnabled = on)
         _uiState.update { it.copy(app = updated) }

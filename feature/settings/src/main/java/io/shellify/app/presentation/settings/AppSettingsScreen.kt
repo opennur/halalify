@@ -50,6 +50,7 @@ import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
@@ -85,6 +86,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -116,6 +118,7 @@ import io.shellify.core.ui.R
 import io.shellify.app.core.engine.GeckoInstallState
 import io.shellify.app.core.shortcut.PwaShortcutManager
 import io.shellify.app.domain.model.EngineType
+import io.shellify.app.domain.model.ContentProtectionSettings
 import io.shellify.app.domain.model.NotificationPermission
 import io.shellify.app.presentation.theme.GeckoWarning
 import io.shellify.app.domain.model.LockType
@@ -667,6 +670,141 @@ fun AppSettingsScreen(
                         }
                     }
                 }
+            }
+
+            // ── Content protection ─────────────────────────────────────────────
+            val protection = app.contentProtection
+            val protectionEnabled = protection.enabled
+            SectionLabel(stringResource(R.string.settings_content_protection))
+            SurfaceCard {
+                ToggleListItem(
+                    label = stringResource(R.string.settings_content_protection_enabled),
+                    checked = protection.enabled,
+                    onToggle = viewModel::toggleContentProtection,
+                    icon = { Icon(Icons.Default.VisibilityOff, null) },
+                )
+                CardDivider()
+                ToggleListItem(
+                    label = stringResource(R.string.settings_content_protection_images),
+                    checked = protection.blurImages,
+                    enabled = protectionEnabled,
+                    onToggle = viewModel::toggleContentProtectionImages,
+                    icon = { Icon(Icons.Default.Image, null) },
+                )
+                CardDivider()
+                ToggleListItem(
+                    label = stringResource(R.string.settings_content_protection_videos),
+                    checked = protection.blurVideos,
+                    enabled = protectionEnabled,
+                    onToggle = viewModel::toggleContentProtectionVideos,
+                    icon = { Icon(Icons.Default.Refresh, null) },
+                )
+                CardDivider()
+                ToggleListItem(
+                    label = stringResource(R.string.settings_content_protection_grayscale),
+                    checked = protection.grayscale,
+                    enabled = protectionEnabled,
+                    onToggle = viewModel::toggleContentProtectionGrayscale,
+                    icon = { Icon(Icons.Default.Tune, null) },
+                )
+                CardDivider()
+                ToggleListItem(
+                    label = stringResource(R.string.settings_content_protection_blur_male),
+                    checked = protection.blurMale,
+                    enabled = protectionEnabled,
+                    onToggle = viewModel::toggleContentProtectionBlurMale,
+                    icon = { Icon(Icons.Default.Person, null) },
+                )
+                CardDivider()
+                ToggleListItem(
+                    label = stringResource(R.string.settings_content_protection_blur_female),
+                    checked = protection.blurFemale,
+                    enabled = protectionEnabled,
+                    onToggle = viewModel::toggleContentProtectionBlurFemale,
+                    icon = { Icon(Icons.Default.Person, null) },
+                )
+                CardDivider()
+                ToggleListItem(
+                    label = stringResource(R.string.settings_content_protection_startup_blur),
+                    checked = protection.startupBlur,
+                    enabled = protectionEnabled,
+                    onToggle = viewModel::toggleContentProtectionStartupBlur,
+                    icon = { Icon(Icons.Default.Shield, null) },
+                )
+                CardDivider()
+                ToggleListItem(
+                    label = stringResource(R.string.settings_content_protection_hover_reveal),
+                    checked = protection.hoverReveal,
+                    enabled = protectionEnabled,
+                    onToggle = viewModel::toggleContentProtectionHoverReveal,
+                    icon = { Icon(Icons.Default.VisibilityOff, null) },
+                )
+                CardDivider()
+                Column(
+                    modifier = Modifier.padding(horizontal = Dimens.spaceLg, vertical = Dimens.spaceSm),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(
+                            stringResource(R.string.settings_content_protection_blur_amount),
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        Text(
+                            stringResource(R.string.settings_content_protection_blur_amount_value, protection.blurAmount),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Slider(
+                        value = protection.blurAmount.toFloat(),
+                        onValueChange = { viewModel.setContentProtectionBlurAmount(it.toInt()) },
+                        valueRange = 0f..ContentProtectionSettings.MAX_BLUR_AMOUNT.toFloat(),
+                        enabled = protectionEnabled,
+                    )
+                }
+                CardDivider()
+                Column(
+                    modifier = Modifier.padding(horizontal = Dimens.spaceLg, vertical = Dimens.spaceSm),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(
+                            stringResource(R.string.settings_content_protection_strictness),
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        Text(
+                            stringResource(
+                                R.string.settings_content_protection_strictness_value,
+                                (protection.strictness * 100).toInt(),
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Slider(
+                        value = protection.strictness,
+                        onValueChange = viewModel::setContentProtectionStrictness,
+                        valueRange = ContentProtectionSettings.MIN_STRICTNESS..ContentProtectionSettings.MAX_STRICTNESS,
+                        enabled = protectionEnabled,
+                    )
+                }
+                CardDivider()
+                OutlinedTextField(
+                    value = protection.whitelist.joinToString("\n"),
+                    onValueChange = viewModel::setContentProtectionWhitelist,
+                    label = { Text(stringResource(R.string.settings_content_protection_whitelist)) },
+                    supportingText = {
+                        Text(stringResource(R.string.settings_content_protection_whitelist_desc))
+                    },
+                    enabled = protectionEnabled,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(Dimens.spaceLg),
+                )
             }
 
             // ── Browser & Network ─────────────────────────────────────────────

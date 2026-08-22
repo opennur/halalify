@@ -78,3 +78,19 @@ val MIGRATION_5_6 = object : Migration(5, 6) {
         db.execSQL("ALTER TABLE web_apps ADD COLUMN preserve_tor_identity INTEGER NOT NULL DEFAULT 0")
     }
 }
+
+val MIGRATION_6_7 = object : Migration(6, 7) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE web_apps ADD COLUMN content_protection_enabled INTEGER NOT NULL DEFAULT 1")
+        db.execSQL("ALTER TABLE web_apps ADD COLUMN content_protection_blur_images INTEGER NOT NULL DEFAULT 1")
+        db.execSQL("ALTER TABLE web_apps ADD COLUMN content_protection_blur_videos INTEGER NOT NULL DEFAULT 1")
+        db.execSQL("ALTER TABLE web_apps ADD COLUMN content_protection_blur_amount INTEGER NOT NULL DEFAULT 20")
+        db.execSQL("ALTER TABLE web_apps ADD COLUMN content_protection_grayscale INTEGER NOT NULL DEFAULT 1")
+        db.execSQL("ALTER TABLE web_apps ADD COLUMN content_protection_strictness REAL NOT NULL DEFAULT 0.5")
+        db.execSQL("ALTER TABLE web_apps ADD COLUMN content_protection_blur_male INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE web_apps ADD COLUMN content_protection_blur_female INTEGER NOT NULL DEFAULT 1")
+        db.execSQL("ALTER TABLE web_apps ADD COLUMN content_protection_startup_blur INTEGER NOT NULL DEFAULT 1")
+        db.execSQL("ALTER TABLE web_apps ADD COLUMN content_protection_hover_reveal INTEGER NOT NULL DEFAULT 1")
+        db.execSQL("ALTER TABLE web_apps ADD COLUMN content_protection_whitelist TEXT NOT NULL DEFAULT ''")
+    }
+}

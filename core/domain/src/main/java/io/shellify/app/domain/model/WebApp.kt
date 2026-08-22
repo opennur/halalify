@@ -52,6 +52,8 @@ data class WebApp(
     // Tor
     val useTor: Boolean = false,
     val preserveTorIdentity: Boolean = false,
+    // Local content protection
+    val contentProtection: ContentProtectionSettings = ContentProtectionSettings(),
 ) {
     /** On-disk path: Path → path, SvgIcon → renderedPath, else null. */
     val iconPath: String?

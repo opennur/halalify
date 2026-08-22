@@ -212,4 +212,20 @@ class AppSettingsViewModelTest {
         advanceUntilIdle()
         assertEquals(initial, viewModel.uiState.value.app?.swipeToRefreshEnabled)
     }
+
+    @Test
+    fun `content protection controls update and persist nested policy`() = runTest {
+        viewModel.toggleContentProtectionImages()
+        viewModel.setContentProtectionBlurAmount(42)
+        viewModel.setContentProtectionStrictness(0.8f)
+        viewModel.setContentProtectionWhitelist("example.com\n trusted.example.org")
+        advanceUntilIdle()
+
+        val settings = viewModel.uiState.value.app?.contentProtection
+        assertFalse(settings?.blurImages ?: true)
+        assertEquals(42, settings?.blurAmount)
+        assertEquals(0.8f, settings?.strictness)
+        assertEquals(listOf("example.com", "trusted.example.org"), settings?.whitelist)
+        coVerify { saveWebApp(match { it.contentProtection.blurAmount == 42 }) }
+    }
 }

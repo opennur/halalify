@@ -17,12 +17,12 @@ Each feature module owns exactly one logical user-facing flow:
 | `feature:home` | App grid, search, filter |
 | `feature:link-dispatcher` | URL dispatch: "Open with", share sheet, shellify://open deep link |
 | `feature:onboarding` | First-run consent wizard |
-| `feature:settings` | Per-app and global settings |
+| `feature:settings` | Per-app and global settings, including content protection |
 | `feature:share` | QR code + deep-link export |
 | `feature:shortcut` | Launcher-shortcut trampoline activity |
 | `feature:shortcuts` | Manage pinned shortcuts list |
 | `feature:translate` | Per-app translation config |
-| `feature:webview` | Full-screen PWA browser |
+| `feature:webview` | Full-screen PWA browser and live content-protection controls |
 
 ## Key Classes / Files
 

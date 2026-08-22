@@ -3,6 +3,7 @@ package io.shellify.app.core.engine
 import android.content.Context
 import android.view.View
 import io.shellify.app.domain.model.EngineType
+import io.shellify.app.domain.model.ContentProtectionSettings
 import io.shellify.app.domain.model.WebApp
 
 interface BrowserEngine {
@@ -10,6 +11,7 @@ interface BrowserEngine {
     fun createView(context: Context, app: WebApp, callback: BrowserEngineCallback): View
     fun loadUrl(url: String)
     fun evaluateJavascript(script: String, resultCallback: ((String?) -> Unit)? = null)
+    fun updateContentProtection(settings: ContentProtectionSettings) {}
     fun canGoBack(): Boolean
     fun goBack()
     fun reload()

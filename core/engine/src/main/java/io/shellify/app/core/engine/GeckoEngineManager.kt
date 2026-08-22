@@ -3,6 +3,8 @@ package io.shellify.app.core.engine
 import android.content.Context
 import android.content.SharedPreferences
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -17,6 +19,7 @@ import org.xmlpull.v1.XmlPullParser
 import org.xmlpull.v1.XmlPullParserFactory
 import org.mozilla.geckoview.GeckoRuntime
 import org.mozilla.geckoview.GeckoRuntimeSettings
+import org.mozilla.geckoview.WebExtension
 import org.mozilla.geckoview.StorageController
 import java.io.File
 import java.io.FileOutputStream
@@ -44,6 +47,9 @@ class GeckoEngineManager(private val context: Context) {
 
         const val GECKO_VERSION = "140.0.20250707120347"
         private const val MAVEN_BASE = "https://maven.mozilla.org/maven2/org/mozilla/geckoview"
+        internal const val CONTENT_PROTECTION_EXTENSION_ID = "content-protection@shellify.app"
+        private const val CONTENT_PROTECTION_EXTENSION_URI =
+            "resource://android/assets/web_extensions/content_protection/"
 
         private val ABI_ARTIFACT = mapOf(
             "arm64-v8a" to "geckoview-arm64-v8a",
@@ -71,6 +77,9 @@ class GeckoEngineManager(private val context: Context) {
     // which are checked per-connection, so applying them before each session.open() is sufficient
     // without needing a separate runtime per ProxyConfig (T-02-20, WR-02-fix).
     @Volatile private var runtime: GeckoRuntime? = null
+    @Volatile private var contentProtectionExtension: WebExtension? = null
+    private var extensionInstallInFlight = false
+    private val extensionListeners = mutableListOf<(WebExtension) -> Unit>()
 
     // Override in tests to supply mock GeckoRuntime instances without calling GeckoRuntime.create().
     internal var runtimeFactory: (ProxyConfig) -> GeckoRuntime = ::buildRuntime
@@ -172,6 +181,47 @@ class GeckoEngineManager(private val context: Context) {
         return synchronized(this) {
             runtime ?: runtimeFactory(proxyConfig).also { runtime = it }
         }
+    }
+
+    /** Installs the bundled protection extension once and notifies current Gecko sessions. */
+    fun ensureContentProtectionExtension(onReady: (WebExtension) -> Unit) {
+        contentProtectionExtension?.let { onReady(it); return }
+        synchronized(this) {
+            contentProtectionExtension?.let { onReady(it); return }
+            extensionListeners += onReady
+            if (extensionInstallInFlight) return
+            extensionInstallInFlight = true
+        }
+
+        val result = getRuntime().webExtensionController.ensureBuiltIn(
+            CONTENT_PROTECTION_EXTENSION_URI,
+            CONTENT_PROTECTION_EXTENSION_ID,
+        )
+        result.withHandler(Handler(Looper.getMainLooper())).accept(
+            { extension ->
+                if (extension == null) {
+                    synchronized(this) {
+                        extensionInstallInFlight = false
+                        extensionListeners.clear()
+                    }
+                    Log.w(TAG, "Content protection extension returned no installation")
+                } else {
+                    val listeners = synchronized(this) {
+                        contentProtectionExtension = extension
+                        extensionInstallInFlight = false
+                        extensionListeners.toList().also { extensionListeners.clear() }
+                    }
+                    listeners.forEach { it(extension) }
+                }
+            },
+            { error ->
+                synchronized(this) {
+                    extensionInstallInFlight = false
+                    extensionListeners.clear()
+                }
+                Log.w(TAG, "Content protection extension unavailable: ${error?.message}")
+            },
+        )
     }
 
     private fun applyProxySystemProperties(proxyConfig: ProxyConfig) {
@@ -362,6 +412,7 @@ class GeckoEngineManager(private val context: Context) {
             try { it.shutdown() } catch (_: Exception) { }
         }
         runtime = null
+        contentProtectionExtension = null
         Log.i(TAG, "GeckoView uninstalled")
     }
 

@@ -12,6 +12,7 @@
 - Apply the per-app engine selection at startup (system WebView vs. GeckoView).
 - Inject the `AdBlocker` content blocker when `webApp.adBlockEnabled` is true.
 - Inject the `TranslateBridge` JavaScript bridge when translation is enabled.
+- Apply local content protection to images and videos in the main page and popup WebViews.
 - Show a lock prompt (password or biometric) on every resume if a lock type is configured.
 - Hide/show the status bar according to `webApp.fullscreen`.
 - Persist and restore the browsing session across process restarts via `IsolationManager`.
@@ -53,6 +54,7 @@ When a page calls `window.open()` (e.g. the Google sign-in consent popup), the e
 |---|---|---|
 | Ad-block | `webApp.adBlockEnabled` | `adBlocker.inject(engineView)` |
 | Translation | `webApp.translationConfig.enabled` | `translateBridge.attach(engineView, targetLanguage)` |
+| Content protection | `webApp.contentProtection.enabled` | Document-start bridge or Gecko WebExtension |
 | Fullscreen | `webApp.fullscreen` | `WindowInsetsControllerCompat.hide(SYSTEM_BARS)` |
 | Engine type | `webApp.engineType == GECKO` | swap `GeckoViewEngine` for `SystemWebViewEngine` |
 

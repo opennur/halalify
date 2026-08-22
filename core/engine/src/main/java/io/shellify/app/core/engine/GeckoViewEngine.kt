@@ -6,8 +6,11 @@ import android.net.Uri
 import android.util.Log
 import android.view.View
 import io.shellify.app.domain.model.EngineType
+import io.shellify.app.domain.model.ContentProtectionSettings
 import io.shellify.app.domain.model.UserAgentMode
 import io.shellify.app.domain.model.WebApp
+import org.json.JSONArray
+import org.json.JSONObject
 import org.mozilla.geckoview.AllowOrDeny
 import org.mozilla.geckoview.ContentBlocking
 import org.mozilla.geckoview.GeckoResult
@@ -19,6 +22,7 @@ import org.mozilla.geckoview.WebNotification
 import org.mozilla.geckoview.WebNotificationDelegate
 import org.mozilla.geckoview.WebRequestError
 import org.mozilla.geckoview.WebResponse
+import org.mozilla.geckoview.WebExtension
 
 // Thin, test-injectable data holder so unit tests can exercise fan-out without a real WebNotification.
 internal data class NotificationPayload(
@@ -70,6 +74,8 @@ class GeckoViewEngine(
         internal const val TOR_PROXY_HOST = "127.0.0.1"
         @Suppress("MagicNumber")
         internal const val TOR_PROXY_PORT = 9050
+        private const val CONTENT_PROTECTION_NATIVE_APP = "shellifyContentProtection"
+        private const val CONTENT_PROTECTION_UPDATE_EVENT = "shellifyContentProtectionUpdate"
     }
 
     /** Returns the ProxyConfig to use when opening a GeckoRuntime for [app]. */
@@ -91,6 +97,8 @@ class GeckoViewEngine(
     private var lastUaOverride: String? = null
     private var lastApp: WebApp? = null
     private var contextId: String? = null
+    private var contentProtectionSettings = ContentProtectionSettings()
+    private var contentProtectionExtension: WebExtension? = null
 
     // Open popup windows (window.open() / OAuth). Each holds its child session and the GeckoView
     // hosting it so both can be torn down on close or engine destroy.
@@ -113,6 +121,7 @@ class GeckoViewEngine(
         this.callback = callback
         this.lastApp = app
         this.contextId = app.isolationId
+        this.contentProtectionSettings = app.contentProtection
 
         val uaMode = when (app.uaMode) {
             UserAgentMode.CHROME_DESKTOP -> GeckoSessionSettings.USER_AGENT_MODE_DESKTOP
@@ -145,6 +154,17 @@ class GeckoViewEngine(
         val view = GeckoView(context)
         view.setSession(session)
         geckoView = view
+        engineManager.ensureContentProtectionExtension { extension ->
+            contentProtectionExtension = extension
+            this.session?.let {
+                attachContentProtectionExtension(it, extension)
+                injectContentProtection(it)
+            }
+            popups.forEach {
+                attachContentProtectionExtension(it.session, extension)
+                injectContentProtection(it.session)
+            }
+        }
         return view
     }
 
@@ -165,6 +185,7 @@ class GeckoViewEngine(
 
         // Use the proxy-aware runtime so sessions for Tor apps route through SOCKS5.
         s.open(engineManager.getRuntime(lastApp?.let { proxyConfigFor(it) } ?: ProxyConfig.None))
+        contentProtectionExtension?.let { attachContentProtectionExtension(s, it) }
 
         s.contentDelegate = object : GeckoSession.ContentDelegate {
             override fun onTitleChange(session: GeckoSession, title: String?) {
@@ -251,11 +272,13 @@ class GeckoViewEngine(
         s.progressDelegate = object : GeckoSession.ProgressDelegate {
             override fun onPageStart(session: GeckoSession, url: String) {
                 cb.onPageStarted(url)
+                injectContentProtection(session)
                 // Log main-frame navigation as a non-blocked entry (D-05: page-level only for GeckoView).
                 cb.onRequestIntercepted(url, blocked = false)
             }
 
             override fun onPageStop(session: GeckoSession, success: Boolean) {
+                injectContentProtection(session)
                 cb.onPageFinished(currentUrl)
             }
 
@@ -308,6 +331,15 @@ class GeckoViewEngine(
                 cb?.onTitleChanged(title)
             }
         }
+        popupSession.progressDelegate = object : GeckoSession.ProgressDelegate {
+            override fun onPageStart(session: GeckoSession, url: String) {
+                injectContentProtection(session)
+            }
+
+            override fun onPageStop(session: GeckoSession, success: Boolean) {
+                injectContentProtection(session)
+            }
+        }
         popupSession.navigationDelegate = object : GeckoSession.NavigationDelegate {
             override fun onLoadRequest(
                 session: GeckoSession,
@@ -329,8 +361,37 @@ class GeckoViewEngine(
         // returned session (bug 1510314). Do NOT call open() here — that violates the contract.
         popupView.setSession(popupSession)
         popups.add(PopupHandle(popupSession, popupView))
+        contentProtectionExtension?.let { attachContentProtectionExtension(popupSession, it) }
         cb?.onShowPopup(popupView)
         return popupSession
+    }
+
+    private fun attachContentProtectionExtension(session: GeckoSession, extension: WebExtension) {
+        session.webExtensionController.setMessageDelegate(
+            extension,
+            object : WebExtension.MessageDelegate {
+                override fun onMessage(
+                    nativeApp: String,
+                    message: Any,
+                    sender: WebExtension.MessageSender,
+                ): GeckoResult<Any> = GeckoResult.fromValue(contentProtectionJson())
+            },
+            CONTENT_PROTECTION_NATIVE_APP,
+        )
+    }
+
+    private fun contentProtectionJson(): JSONObject = JSONObject().apply {
+        put("enabled", contentProtectionSettings.enabled)
+        put("blurImages", contentProtectionSettings.blurImages)
+        put("blurVideos", contentProtectionSettings.blurVideos)
+        put("blurAmount", contentProtectionSettings.blurAmount)
+        put("grayscale", contentProtectionSettings.grayscale)
+        put("strictness", contentProtectionSettings.strictness)
+        put("blurMale", contentProtectionSettings.blurMale)
+        put("blurFemale", contentProtectionSettings.blurFemale)
+        put("startupBlur", contentProtectionSettings.startupBlur)
+        put("hoverReveal", contentProtectionSettings.hoverReveal)
+        put("whitelist", JSONArray(contentProtectionSettings.whitelist))
     }
 
     private fun closePopup(session: GeckoSession) {
@@ -375,6 +436,7 @@ class GeckoViewEngine(
             session = null
 
             val newSession = buildSession(lastUaMode, lastUaOverride, cb)
+            contentProtectionExtension?.let { attachContentProtectionExtension(newSession, it) }
             view.setSession(newSession)
             session = newSession
 
@@ -394,16 +456,35 @@ class GeckoViewEngine(
 
     override fun evaluateJavascript(script: String, resultCallback: ((String?) -> Unit)?) {
         val s = session ?: run { resultCallback?.invoke(null); return }
+        evaluateSessionJavascript(s, script)
+        resultCallback?.invoke(null)
+    }
+
+    override fun updateContentProtection(settings: ContentProtectionSettings) {
+        contentProtectionSettings = settings
+        session?.let(::injectContentProtection)
+        popups.forEach { injectContentProtection(it.session) }
+    }
+
+    private fun injectContentProtection(target: GeckoSession) {
+        val settings = contentProtectionJson()
+        evaluateSessionJavascript(
+            target,
+            "document.dispatchEvent(new CustomEvent('$CONTENT_PROTECTION_UPDATE_EVENT'," +
+                "{detail:$settings}));",
+        )
+    }
+
+    private fun evaluateSessionJavascript(target: GeckoSession, script: String) {
         try {
             val encoded = android.util.Base64.encodeToString(
                 script.toByteArray(Charsets.UTF_8),
                 android.util.Base64.NO_WRAP,
             )
-            s.loadUri("javascript:void(eval(atob('$encoded')))")
+            target.loadUri("javascript:void(eval(atob('$encoded')))")
         } catch (e: Exception) {
             Log.e(TAG, "evaluateJavascript failed", e)
         }
-        resultCallback?.invoke(null)
     }
 
     override fun canGoBack() = canGoBackFlag

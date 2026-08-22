@@ -24,7 +24,7 @@
 | `BrowserEngineCallback` | Callback interface for page load progress, network errors, DOM change events, and network request interception (`onRequestIntercepted(url, blocked)`). |
 | `GeckoViewEngine` | `BrowserEngine` implementation backed by Mozilla GeckoView. |
 | `SystemWebViewEngine` | `BrowserEngine` implementation backed by `android.webkit.WebView`. |
-| `GeckoEngineManager` | Downloads GeckoView 128.0.20240704121409 from `maven.mozilla.org`; detects device ABI (`arm64-v8a`, `armeabi-v7a`, `x86_64`, `x86`); SHA-256 verifies the downloaded AAR; extracts native `.so` libraries to `filesDir/gecko_engine/lib/$abi/`; exposes a `StateFlow<GeckoInstallState>` for UI observation. |
+| `GeckoEngineManager` | Downloads GeckoView 140.0.20250707120347 from `maven.mozilla.org`; detects device ABI (`arm64-v8a`, `armeabi-v7a`, `x86_64`, `x86`); SHA-256 verifies the downloaded AAR; extracts native `.so` libraries to `filesDir/gecko_engine/lib/$abi/`; exposes a `StateFlow<GeckoInstallState>` for UI observation and installs the bundled content-protection WebExtension. |
 | `WebViewManager` | Factory that creates and configures `WebView` instances: applies ad-block injection, sets the custom user-agent, and wires the `BrowserEngineCallback`. |
 | `AdBlocker` | EasyList-based blocker. Core API: `block(url: String, contentType: String): Boolean`. Supports per-app custom rules. |
 | `AdBlockFilterCache` | Two-tier cache: in-memory LRU + disk persistence. Reduces filter list parse overhead on cold start. |
@@ -107,7 +107,7 @@ stateDiagram-v2
 
 | Item | Value / Location |
 |---|---|
-| GeckoView version | `128.0.20240704121409` |
+| GeckoView version | `140.0.20250707120347` |
 | Maven repository | `https://maven.mozilla.org/maven2` |
 | Native lib output path | `filesDir/gecko_engine/lib/$abi/` |
 | ABI list | `arm64-v8a`, `armeabi-v7a`, `x86_64`, `x86` |
@@ -115,6 +115,23 @@ stateDiagram-v2
 | Native libs in APK | Excluded via `packagingOptions { exclude "**/*.so" }` |
 
 **Consumers:** `app` (GeckoEngineManager init on startup), `feature:webview` (engine selection + Tor routing), `feature:settings` (engine toggle + Tor toggle), `feature:add` (site preview).
+
+### Local content protection
+
+`SystemWebViewEngine` registers `ContentProtectionBridge` with
+`WebViewCompat.addDocumentStartJavaScript` for the main view and every popup, with a post-load
+fallback for older WebView providers. `GeckoViewEngine` installs the built-in
+`web_extensions/content_protection` extension at `document_start` and sends policy updates through
+a DOM event so the native host can update the extension's isolated content-script world. Both
+paths use the active app policy and cover main pages plus popup sessions, not nested iframe documents.
+
+Content protection also injects the bundled `human.js` runtime and `smart-detector.js`. The System
+WebView serves the six model files through the same-origin
+`/__shellify_content_protection/models/` request path so WebView CORS rules do not block local
+inference. GeckoView resolves the same files through `browser.runtime.getURL()`. Face gender
+inference remains on-device; regional `backdrop-filter` overlays are used after detection, with
+metadata and maximum-strictness fallback when inference is unavailable. The MoveNet body weights
+remain bundled but are not loaded during the face-classification pass.
 
 ## Popup Windows (OAuth / "Sign in with Google")
 
@@ -221,4 +238,3 @@ System.setProperty("socksProxyPort", "9050")
 This is process-scoped but acceptable since only one Tor runtime exists per process.
 
 **Back-compat:** All existing callers of `getRuntime()` continue to work via the `ProxyConfig.None` default argument.
-

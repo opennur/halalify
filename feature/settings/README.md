@@ -6,7 +6,7 @@
 
 `feature:settings` contains two distinct but related settings surfaces:
 
-1. **App Settings** — per-PWA controls: fullscreen, ad-block, translation, lock, user-agent, isolated data, shortcut, delete.
+1. **App Settings** — per-PWA controls: fullscreen, ad-block, translation, content protection, lock, user-agent, isolated data, shortcut, delete.
 2. **Global Settings** — app-wide controls: theme, dynamic color, accent color, language, backup, GeckoView management, and a "wipe all data" option.
 
 Both panels live in the same module because they share the same `core:*` dependencies and are typically navigated to from the same flows.
@@ -91,7 +91,7 @@ fun AppSettingsScreen(
 )
 ```
 
-Sections: **General** (fullscreen, UA mode) | **Privacy** (ad-block, isolated data, lock) | **Translation** | **Shortcut** | **Danger zone** (delete).
+Sections: **General** (fullscreen, UA mode) | **Privacy** (ad-block, isolated data, lock) | **Content protection** (media coverage, blur, strictness, subject targets, startup behavior, hover reveal, whitelist) | **Translation** | **Shortcut** | **Danger zone** (delete).
 
 ### `GlobalSettingsViewModel`
 

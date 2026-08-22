@@ -25,6 +25,7 @@ The `core/` directory contains **14 modules** split into two conceptual layers:
 | `shortcut` | Android home-screen shortcut management |
 | `theme` | Dynamic theming, color extraction, dark/light mode |
 | `translate` | In-page translation integration |
+| `webbridge` | Local JavaScript bridges and content protection |
 | `ui` | Shared Compose components, design tokens, theming wrappers |
 
 ## Purpose
