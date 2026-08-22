@@ -7,11 +7,16 @@
   var MODEL_PATH = '/__shellify_content_protection/models/';
   var DETECTOR_BACKENDS = ['humangl', 'webgl', 'cpu'];
   var DETECTOR_LOAD_TIMEOUT_MS = 45000;
-  var DETECTION_TIMEOUT_MS = 30000;
-  var VIDEO_CACHE_MS = 900;
+  var DETECTION_TIMEOUT_MS = 12000;
+  var VIDEO_CACHE_MS = 1200;
+  var DETECTOR_ERROR_CACHE_MS = 5000;
   var IMAGE_CACHE_MS = 60000;
-  var MAX_CAPTURE_DIMENSION = 1280;
+  var MAX_CAPTURE_DIMENSION = 768;
+  var VIDEO_JOB_MAX_AGE_MS = 5000;
+  var DETECTOR_RETRY_INITIAL_MS = 15000;
+  var DETECTOR_RETRY_MAX_MS = 300000;
   var states = new WeakMap();
+  var captureCanvases = new WeakMap();
   var tracked = [];
   var queue = [];
   var detectorPromise = null;
@@ -19,11 +24,23 @@
   var detectorBackend = '';
   var detectorError = '';
   var detectorLoading = false;
+  var detectorFailureCount = 0;
+  var detectorRetryAt = 0;
   var lastDetectionMs = 0;
   var detectorWarningShown = false;
   var draining = false;
   var overlayRoot = null;
   var listenersInstalled = false;
+  var refreshScheduled = false;
+  var regionalBlurSupported = null;
+
+  function mediaKind(element) {
+    return element && element.tagName ? element.tagName.toLowerCase() : '';
+  }
+
+  function isVideo(element) {
+    return mediaKind(element) === 'video';
+  }
 
   function mediaDimensions(element) {
     return {
@@ -77,17 +94,35 @@
     var scale = Math.min(1, MAX_CAPTURE_DIMENSION / Math.max(dimensions.width, dimensions.height));
     var width = Math.max(1, Math.round(dimensions.width * scale));
     var height = Math.max(1, Math.round(dimensions.height * scale));
-    var canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
-    var context = canvas.getContext('2d', { willReadFrequently: true });
+    var currentTime = Number(element.currentTime || 0);
+    var cached = captureCanvases.get(element);
+    var canvas = cached && cached.canvas;
+    if (!canvas) {
+      canvas = document.createElement('canvas');
+      cached = { canvas: canvas, width: 0, height: 0, time: -1, context: null };
+      captureCanvases.set(element, cached);
+    }
+    if (cached.width !== width) {
+      canvas.width = width;
+      cached.width = width;
+    }
+    if (cached.height !== height) {
+      canvas.height = height;
+      cached.height = height;
+    }
+    if (cached.time === currentTime && cached.context) {
+      return Promise.resolve({ input: canvas, width: width, height: height });
+    }
+    var context = cached.context || canvas.getContext('2d', { willReadFrequently: true });
     if (!context) return Promise.reject(new Error('Video capture canvas is unavailable'));
+    cached.context = context;
     try {
       context.drawImage(element, 0, 0, width, height);
       context.getImageData(0, 0, 1, 1);
     } catch (_) {
       return Promise.reject(new Error('Video frame is not readable'));
     }
+    cached.time = currentTime;
     return Promise.resolve({ input: canvas, width: width, height: height });
   }
 
@@ -99,7 +134,23 @@
   function isReady(element) {
     var dimensions = mediaDimensions(element);
     if (!dimensions.width || !dimensions.height) return false;
-    return element.tagName.toLowerCase() !== 'video' || element.readyState >= 2;
+    return !isVideo(element) || element.readyState >= 2;
+  }
+
+  function isVisible(element) {
+    if (document.hidden === true) return false;
+    if (!element || typeof element.getBoundingClientRect !== 'function') return true;
+    var rect = element.getBoundingClientRect();
+    if (!rect || !rect.width || !rect.height) return false;
+    var documentElement = document.documentElement || {};
+    var viewportWidth = Number(window.innerWidth || documentElement.clientWidth || 0);
+    var viewportHeight = Number(window.innerHeight || documentElement.clientHeight || 0);
+    if (!viewportWidth || !viewportHeight) return true;
+    return rect.right > 0 && rect.bottom > 0 && rect.left < viewportWidth && rect.top < viewportHeight;
+  }
+
+  function isVideoActive(element) {
+    return !isVideo(element) || (element.paused !== true && element.ended !== true && isVisible(element));
   }
 
   function modelBasePath() {
@@ -137,6 +188,37 @@
       detectorWarningShown = true;
       console.warn('Shellify content protection detector unavailable:', detectorError);
     }
+  }
+
+  function openDetectorCircuit(error) {
+    var now = Date.now();
+    if (detectorRetryAt > now) {
+      if (error) error.detectorCircuit = true;
+      return;
+    }
+    detectorFailureCount = Math.min(detectorFailureCount + 1, 8);
+    var delay = Math.min(
+      DETECTOR_RETRY_MAX_MS,
+      DETECTOR_RETRY_INITIAL_MS * Math.pow(2, detectorFailureCount - 1)
+    );
+    detectorRetryAt = now + delay;
+    detector = null;
+    detectorBackend = '';
+    detectorPromise = null;
+    if (error) error.detectorCircuit = true;
+    rememberDetectorError(error);
+  }
+
+  function noteDetectorSuccess() {
+    detectorFailureCount = 0;
+    detectorRetryAt = 0;
+    detectorError = '';
+  }
+
+  function detectorCircuitError() {
+    var error = new Error(detectorError || 'Detector retry temporarily disabled');
+    error.detectorCircuit = true;
+    return error;
   }
 
   function detectorConfig(backend) {
@@ -233,7 +315,7 @@
         return attempt();
       });
     };
-    return attempt().then(function(instance) {
+    return Promise.resolve().then(attempt).then(function(instance) {
       detectorLoading = false;
       return instance;
     }, function(error) {
@@ -243,13 +325,78 @@
   }
 
   function getDetector() {
-    if (!detectorPromise) {
-      detectorPromise = createDetector().catch(function(error) {
-        detectorPromise = null;
-        return Promise.reject(error);
-      });
-    }
+    if (detector) return Promise.resolve(detector);
+    if (detectorPromise) return detectorPromise;
+    if (detectorRetryAt > Date.now()) return Promise.reject(detectorCircuitError());
+    detectorPromise = Promise.resolve().then(function() {
+      return createDetector();
+    }).catch(function(error) {
+      detectorPromise = null;
+      if (!error || !error.detectorCircuit) openDetectorCircuit(error);
+      return Promise.reject(error);
+    });
     return detectorPromise;
+  }
+
+  function configSignature(config) {
+    return [
+      config.blurFemale ? 'f' : '-',
+      config.blurMale ? 'm' : '-',
+      Math.round(Number(config.strictness || 0) * 100),
+      config.blurAmount,
+      config.grayscale ? 'g' : '-'
+    ].join('|');
+  }
+
+  function skippedResult(element) {
+    var dimensions = mediaDimensions(element);
+    return {
+      ready: false,
+      pending: false,
+      skipped: true,
+      regions: [],
+      width: dimensions.width,
+      height: dimensions.height
+    };
+  }
+
+  function emptyResult(element) {
+    var dimensions = mediaDimensions(element);
+    return {
+      ready: true,
+      pending: false,
+      error: false,
+      unknownGender: false,
+      regions: [],
+      width: dimensions.width,
+      height: dimensions.height
+    };
+  }
+
+  function videoJobIsStale(job) {
+    return isVideo(job.element) &&
+      (!isReady(job.element) || !isVideoActive(job.element) || Date.now() - job.enqueuedAt > VIDEO_JOB_MAX_AGE_MS);
+  }
+
+  function updateQueuedJob(state, element, config, currentSignature) {
+    state.signature = currentSignature;
+    state.requestId += 1;
+    if (!state.queuedJob) {
+      state.queuedJob = {
+        element: element,
+        config: config,
+        state: state,
+        requestId: state.requestId,
+        enqueuedAt: Date.now()
+      };
+      queue.push(state.queuedJob);
+      return true;
+    }
+    state.queuedJob.config = config;
+    state.queuedJob.requestId = state.requestId;
+    state.queuedJob.enqueuedAt = Date.now();
+    state.queuedJob.element = element;
+    return true;
   }
 
   function getState(element) {
@@ -266,7 +413,12 @@
         sourceWidth: 0,
         sourceHeight: 0,
         revealed: false,
-        requestId: 0
+        requestId: 0,
+        configSignature: '',
+        queuedJob: null,
+        runningJob: null,
+        appliedResult: null,
+        appliedConfigSignature: ''
       };
       states.set(element, state);
     }
@@ -278,10 +430,8 @@
       mediaSource(element),
       element.videoWidth || element.naturalWidth || 0,
       element.videoHeight || element.naturalHeight || 0,
-      config.blurFemale ? 'f' : '-',
-      config.blurMale ? 'm' : '-',
-      Math.round(Number(config.strictness || 0) * 100),
-      element.tagName.toLowerCase() === 'video' ? Math.floor(Number(element.currentTime || 0) * 4) : ''
+      configSignature(config),
+      isVideo(element) ? Math.floor(Number(element.currentTime || 0)) : ''
     ].join('|');
   }
 
@@ -305,20 +455,6 @@
     return [x - width * factor, y - height * factor, width * (1 + factor * 2), height * (1 + factor * 2)];
   }
 
-  function center(box) {
-    return [Number(box[0]) + Number(box[2]) / 2, Number(box[1]) + Number(box[3]) / 2];
-  }
-
-  function contains(box, point) {
-    return point[0] >= box[0] && point[0] <= box[0] + box[2] &&
-      point[1] >= box[1] && point[1] <= box[1] + box[3];
-  }
-
-  function intersects(first, second) {
-    return first[0] < second[0] + second[2] && first[0] + first[2] > second[0] &&
-      first[1] < second[1] + second[3] && first[1] + first[3] > second[1];
-  }
-
   function isTargetFace(face, config) {
     var score = number(face.genderScore, 0);
     var threshold = Math.max(0.2, Math.min(0.5, 0.2 + number(config.strictness, 0) * 0.15));
@@ -326,66 +462,70 @@
       (face.gender === 'male' && config.blurMale && score >= threshold);
   }
 
-  function bodyBelongsToFace(body, face) {
-    if (!validBox(body.box) || !validBox(face.box)) return false;
-    var bodyBox = expandBox(body.box, 0.12);
-    return contains(bodyBox, center(face.box)) || intersects(bodyBox, face.box);
-  }
-
   function rescaleBoxes(result, inputWidth, inputHeight, outputWidth, outputHeight) {
     if (!result || !inputWidth || !inputHeight ||
         (inputWidth === outputWidth && inputHeight === outputHeight)) return;
     var scaleX = outputWidth / inputWidth;
     var scaleY = outputHeight / inputHeight;
-    ['face', 'body'].forEach(function(kind) {
-      var detections = Array.isArray(result[kind]) ? result[kind] : [];
-      detections.forEach(function(detection) {
-        if (!validBox(detection.box)) return;
-        detection.box = [
-          Number(detection.box[0]) * scaleX,
-          Number(detection.box[1]) * scaleY,
-          Number(detection.box[2]) * scaleX,
-          Number(detection.box[3]) * scaleY
-        ];
-      });
+    var detections = Array.isArray(result.face) ? result.face : [];
+    detections.forEach(function(detection) {
+      if (!validBox(detection.box)) return;
+      detection.box = [
+        Number(detection.box[0]) * scaleX,
+        Number(detection.box[1]) * scaleY,
+        Number(detection.box[2]) * scaleX,
+        Number(detection.box[3]) * scaleY
+      ];
     });
   }
 
   function detect(element, config) {
     var dimensions = mediaDimensions(element);
     if (!dimensions.width || !dimensions.height) {
-      return Promise.resolve({ ready: false, pending: true, regions: [] });
+      return Promise.resolve(skippedResult(element));
     }
     return getDetector().then(function(instance) {
       var startedAt = Date.now();
       return captureInput(element).then(function(capture) {
-        var detection = instance.detect(capture.input);
-        return withTimeout(detection, DETECTION_TIMEOUT_MS, 'Detector inference timed out').then(function(result) {
+        var detection;
+        try {
+          detection = instance.detect(capture.input);
+        } catch (error) {
+          error.detectorFailure = true;
+          throw error;
+        }
+        var timeout = isVideo(element) ? DETECTION_TIMEOUT_MS : DETECTION_TIMEOUT_MS * 2;
+        return withTimeout(detection, timeout, 'Detector inference timed out').then(function(result) {
+          if (result && result.error) {
+            var resultError = new Error(String(result.error));
+            resultError.detectorFailure = true;
+            throw resultError;
+          }
+          noteDetectorSuccess();
           lastDetectionMs = Date.now() - startedAt;
           rescaleBoxes(result, capture.width, capture.height, dimensions.width, dimensions.height);
           return result;
+        }, function(error) {
+          error.detectorFailure = true;
+          throw error;
         });
+      }, function(error) {
+        error.captureFailure = true;
+        throw error;
       });
     }).then(function(result) {
-      if (result && result.error) {
-        rememberDetectorError(result.error);
-        return { ready: false, pending: false, error: true, message: String(result.error), regions: [] };
-      }
       var faces = Array.isArray(result && result.face) ? result.face : [];
-      var bodies = Array.isArray(result && result.body) ? result.body : [];
       var targetFaces = faces.filter(function(face) {
         return validBox(face.box) && isTargetFace(face, config);
       });
       var regions = targetFaces.map(function(face) { return expandBox(face.box, 0.1); });
-      bodies.forEach(function(body) {
-        if (!validBox(body.box)) return;
-        if (targetFaces.some(function(face) { return bodyBelongsToFace(body, face); })) {
-          regions.push(expandBox(body.box, 0.05));
-        }
+      var unknownFaces = faces.filter(function(face) {
+        return validBox(face.box) && (!face.gender || face.gender === 'unknown' || number(face.genderScore, 0) < 0.2);
       });
-      var unknownGender = (config.blurFemale || config.blurMale) && faces.some(function(face) {
-        return !face.gender || face.gender === 'unknown' || number(face.genderScore, 0) < 0.2;
-      });
+      var unknownGender = (config.blurFemale || config.blurMale) && unknownFaces.length > 0;
+      if (unknownGender && Number(config.strictness || 0) >= 0.75) {
+        unknownFaces.forEach(function(face) { regions.push(expandBox(face.box, 0.1)); });
+      }
       return {
         ready: true,
         pending: false,
@@ -396,8 +536,15 @@
         height: dimensions.height
       };
     }).catch(function(error) {
-      rememberDetectorError(error);
-      return { ready: false, pending: false, error: true, message: detectorError, regions: [] };
+      if (!error || (!error.captureFailure && !error.detectorCircuit)) openDetectorCircuit(error);
+      if (!error || !error.captureFailure) rememberDetectorError(error);
+      return {
+        ready: false,
+        pending: false,
+        error: true,
+        message: error && error.message ? error.message : detectorError,
+        regions: []
+      };
     });
   }
 
@@ -405,7 +552,7 @@
     if (job && job.requestId !== state.requestId) return;
     state.pending = false;
     state.completedAt = Date.now();
-    state.result = result;
+    if (!(result && result.skipped && state.result && state.result.ready)) state.result = result;
     var callbacks = state.callbacks.slice();
     state.callbacks.length = 0;
     callbacks.forEach(function(callback) { callback(result); });
@@ -420,8 +567,26 @@
         draining = false;
         return;
       }
+      if (job.state.queuedJob === job) job.state.queuedJob = null;
+      if (job.requestId !== job.state.requestId || videoJobIsStale(job)) {
+        deliver(job.state, skippedResult(job.element), job);
+        next();
+        return;
+      }
+      job.state.runningJob = job;
       detect(job.element, job.config).then(function(result) {
+        if (job.state.runningJob === job) job.state.runningJob = null;
         deliver(job.state, result, job);
+        next();
+      }, function(error) {
+        if (job.state.runningJob === job) job.state.runningJob = null;
+        deliver(job.state, {
+          ready: false,
+          pending: false,
+          error: true,
+          message: error && error.message ? error.message : 'Detector failed',
+          regions: []
+        }, job);
         next();
       });
     };
@@ -429,43 +594,63 @@
   }
 
   function analyze(element, config, callback) {
+    var state = getState(element);
+    var currentConfigSignature = configSignature(config);
+    var configChanged = state.configSignature && state.configSignature !== currentConfigSignature;
+    state.configSignature = currentConfigSignature;
     if (!isReady(element)) {
-      callback({ ready: false, pending: true, regions: [] });
+      if (isVideo(element)) callback(configChanged && state.result ? emptyResult(element) : skippedResult(element));
+      else callback({ ready: false, pending: true, regions: [] });
       return;
     }
-    var state = getState(element);
     var currentSignature = signature(element, config);
-    var maxAge = element.tagName.toLowerCase() === 'video' ? VIDEO_CACHE_MS : IMAGE_CACHE_MS;
+    var video = isVideo(element);
+    var maxAge = state.result && state.result.error ? DETECTOR_ERROR_CACHE_MS : (video ? VIDEO_CACHE_MS : IMAGE_CACHE_MS);
     if (!state.pending && state.signature === currentSignature && state.result &&
       Date.now() - state.completedAt < maxAge) {
-      callback(state.result);
+      callback(video && !isVideoActive(element) ? skippedResult(element) : state.result);
+      return;
+    }
+    if (video && !isVideoActive(element)) {
+      if (configChanged && state.result) {
+        state.signature = currentSignature;
+        state.completedAt = Date.now();
+        state.result = emptyResult(element);
+        callback(state.result);
+      } else {
+        callback(skippedResult(element));
+      }
       return;
     }
     if (state.pending) {
-      if (state.signature === currentSignature) {
-        state.callbacks.push(callback);
-        return;
-      }
-      state.signature = currentSignature;
-      state.requestId += 1;
-      state.callbacks.push(callback);
-      queue = queue.filter(function(job) { return job.state !== state; });
-      queue.push({ element: element, config: config, state: state, requestId: state.requestId });
-      drain();
+      state.callbacks = [callback];
+      if (state.signature !== currentSignature) updateQueuedJob(state, element, config, currentSignature);
       return;
     }
     state.pending = true;
     state.signature = currentSignature;
     state.requestId += 1;
     state.callbacks = [callback];
-    queue.push({ element: element, config: config, state: state, requestId: state.requestId });
+    state.queuedJob = {
+      element: element,
+      config: config,
+      state: state,
+      requestId: state.requestId,
+      enqueuedAt: Date.now()
+    };
+    queue.push(state.queuedJob);
     drain();
   }
 
   function supportsRegionalBlur() {
-    if (!window.CSS || typeof window.CSS.supports !== 'function') return true;
-    return window.CSS.supports('backdrop-filter', 'blur(1px)') ||
+    if (regionalBlurSupported !== null) return regionalBlurSupported;
+    if (!window.CSS || typeof window.CSS.supports !== 'function') {
+      regionalBlurSupported = true;
+      return regionalBlurSupported;
+    }
+    regionalBlurSupported = window.CSS.supports('backdrop-filter', 'blur(1px)') ||
       window.CSS.supports('-webkit-backdrop-filter', 'blur(1px)');
+    return regionalBlurSupported;
   }
 
   function getOverlayRoot() {
@@ -544,34 +729,67 @@
       overlay.style.setProperty('top', mapped.top + 'px', 'important');
       overlay.style.setProperty('width', mapped.width + 'px', 'important');
       overlay.style.setProperty('height', mapped.height + 'px', 'important');
-      overlay.style.setProperty('backdrop-filter', filter, 'important');
-      overlay.style.setProperty('-webkit-backdrop-filter', filter, 'important');
+      if (state.opaque) {
+        overlay.style.setProperty('background', 'rgb(0, 0, 0)', 'important');
+        overlay.style.setProperty('backdrop-filter', 'none', 'important');
+        overlay.style.setProperty('-webkit-backdrop-filter', 'none', 'important');
+      } else {
+        overlay.style.setProperty('background', 'transparent', 'important');
+        overlay.style.setProperty('backdrop-filter', filter, 'important');
+        overlay.style.setProperty('-webkit-backdrop-filter', filter, 'important');
+      }
     });
   }
 
   function refreshAll() {
-    tracked = tracked.filter(function(element) {
+    var alive = [];
+    tracked.forEach(function(element) {
       if (!document.documentElement.contains(element)) {
         clear(element);
-        return false;
+        return;
       }
       var state = states.get(element);
       if (state && state.config) refresh(element, state.config);
-      return true;
+      alive.push(element);
     });
+    tracked = alive;
+  }
+
+  function scheduleRefreshAll() {
+    if (refreshScheduled) return;
+    refreshScheduled = true;
+    var refresh = function() {
+      refreshScheduled = false;
+      refreshAll();
+    };
+    if (typeof window.requestAnimationFrame === 'function') window.requestAnimationFrame(refresh);
+    else setTimeout(refresh, 16);
   }
 
   function apply(element, config, result) {
-    if (!supportsRegionalBlur()) return false;
     var root = getOverlayRoot();
     if (!root || !result || !result.regions || !result.regions.length) return false;
     var state = getState(element);
+    var currentConfigSignature = configSignature(config);
+    var reusable = state.appliedResult === result && state.appliedConfigSignature === currentConfigSignature &&
+      state.overlays.length === result.regions.length && state.overlays.every(function(overlay) {
+        return overlay.parentNode === root;
+      });
+    if (reusable) {
+      state.config = config;
+      refresh(element, config);
+      return true;
+    }
     state.overlays.forEach(function(overlay) { overlay.remove(); });
     state.overlays = [];
     state.regions = result.regions;
     state.sourceWidth = result.width;
     state.sourceHeight = result.height;
     state.config = config;
+    // Gecko can black out a video when a backdrop-filter enters its compositor path.
+    state.opaque = isVideo(element) || !supportsRegionalBlur();
+    state.appliedResult = result;
+    state.appliedConfigSignature = currentConfigSignature;
     state.revealed = false;
     result.regions.forEach(function() {
       var overlay = document.createElement('div');
@@ -586,9 +804,9 @@
     refresh(element, config);
     if (!listenersInstalled) {
       listenersInstalled = true;
-      window.addEventListener('scroll', refreshAll, true);
-      window.addEventListener('resize', refreshAll, true);
-      window.addEventListener('orientationchange', refreshAll, true);
+      window.addEventListener('scroll', scheduleRefreshAll, true);
+      window.addEventListener('resize', scheduleRefreshAll, true);
+      window.addEventListener('orientationchange', scheduleRefreshAll, true);
     }
     return true;
   }
@@ -600,6 +818,8 @@
     state.overlays = [];
     state.regions = [];
     state.revealed = false;
+    state.appliedResult = null;
+    state.appliedConfigSignature = '';
     tracked = tracked.filter(function(item) { return item !== element; });
   }
 

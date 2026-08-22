@@ -38,12 +38,24 @@ object ContentProtectionBridge {
   var DATA_PROTECTED = 'data-shellify-protected';
   var DATA_PENDING = 'data-shellify-pending';
   var DATA_REGIONAL = 'data-shellify-regional';
+  var DATA_REGIONAL_FALLBACK = 'data-shellify-regional-fallback';
+  var DATA_REGIONAL_MASK = 'data-shellify-regional-mask';
   var DATA_ORIGINAL_STYLE = 'data-shellify-original-style';
   var DATA_HOVER_HOOK = 'data-shellify-hover-hook';
   var DATA_REVEALED = 'data-shellify-revealed';
-  var currentConfig = __SHELLIFY_CONFIG__;
+  if (window.top !== window.self) return;
+  var initialConfig = __SHELLIFY_CONFIG__;
+  if (window[KEY]) {
+    if (typeof window[KEY].update === 'function') window[KEY].update(initialConfig);
+    return;
+  }
+  var currentConfig = initialConfig;
   var scanTimer = null;
+  var visibilityObserver = null;
   var observer = null;
+  var regionalFallbackRoot = null;
+  var regionalFallbacks = [];
+  var regionalFallbackListenersInstalled = false;
 
   function isMaximumStrictness() {
     return currentConfig.strictness >= 0.999;
@@ -91,6 +103,23 @@ object ContentProtectionBridge {
     var kind = mediaKind(element);
     return (kind === 'img' && currentConfig.blurImages) ||
       (kind === 'video' && currentConfig.blurVideos);
+  }
+
+  function isVisible(element) {
+    if (document.hidden === true) return false;
+    if (!element || typeof element.getBoundingClientRect !== 'function') return true;
+    var rect = element.getBoundingClientRect();
+    if (!rect || !rect.width || !rect.height) return false;
+    var documentElement = document.documentElement || {};
+    var viewportWidth = Number(window.innerWidth || documentElement.clientWidth || 0);
+    var viewportHeight = Number(window.innerHeight || documentElement.clientHeight || 0);
+    if (!viewportWidth || !viewportHeight) return true;
+    return rect.right > 0 && rect.bottom > 0 && rect.left < viewportWidth && rect.top < viewportHeight;
+  }
+
+  function isVideoActive(element) {
+    return mediaKind(element) !== 'video' ||
+      (element.paused !== true && element.ended !== true && isVisible(element));
   }
 
   function normalizedText(value) {
@@ -199,6 +228,171 @@ object ContentProtectionBridge {
     return window['__shellifySmartDetection'];
   }
 
+  function getRegionalFallbackRoot() {
+    if (regionalFallbackRoot && regionalFallbackRoot.parentNode) return regionalFallbackRoot;
+    var parent = document.body || document.documentElement;
+    if (!parent) return null;
+    regionalFallbackRoot = document.createElement('div');
+    regionalFallbackRoot.setAttribute('data-shellify-regional-mask-root', '1');
+    regionalFallbackRoot.style.setProperty('position', 'fixed', 'important');
+    regionalFallbackRoot.style.setProperty('left', '0', 'important');
+    regionalFallbackRoot.style.setProperty('top', '0', 'important');
+    regionalFallbackRoot.style.setProperty('width', '100vw', 'important');
+    regionalFallbackRoot.style.setProperty('height', '100vh', 'important');
+    regionalFallbackRoot.style.setProperty('pointer-events', 'none', 'important');
+    regionalFallbackRoot.style.setProperty('z-index', '2147483647', 'important');
+    regionalFallbackRoot.style.setProperty('overflow', 'hidden', 'important');
+    parent.appendChild(regionalFallbackRoot);
+    return regionalFallbackRoot;
+  }
+
+  function regionalFallbackFor(element) {
+    for (var index = 0; index < regionalFallbacks.length; index++) {
+      if (regionalFallbacks[index].element === element) return regionalFallbacks[index];
+    }
+    return null;
+  }
+
+  function isRegionalBox(value) {
+    return Array.isArray(value) && value.length >= 4 &&
+      isFinite(Number(value[0])) && isFinite(Number(value[1])) &&
+      isFinite(Number(value[2])) && isFinite(Number(value[3])) &&
+      Number(value[2]) > 0 && Number(value[3]) > 0;
+  }
+
+  function parseRegionalPosition(value, freeSpace) {
+    var text = String(value || '50%').trim();
+    if (text.endsWith('%')) return freeSpace * Math.max(0, Math.min(1, parseFloat(text) / 100));
+    var pixels = parseFloat(text);
+    return isFinite(pixels) ? pixels : freeSpace / 2;
+  }
+
+  function refreshRegionalFallback(entry) {
+    if (!document.documentElement || !document.documentElement.contains(entry.element)) return false;
+    var element = entry.element;
+    var rect = element.getBoundingClientRect();
+    if (!rect.width || !rect.height) {
+      entry.masks.forEach(function(mask) { mask.style.setProperty('display', 'none', 'important'); });
+      return true;
+    }
+    var sourceWidth = Number(entry.width) || Number(element.videoWidth || element.naturalWidth || element.width || rect.width);
+    var sourceHeight = Number(entry.height) || Number(element.videoHeight || element.naturalHeight || element.height || rect.height);
+    var scaleX = sourceWidth ? rect.width / sourceWidth : 0;
+    var scaleY = sourceHeight ? rect.height / sourceHeight : 0;
+    var computed = window.getComputedStyle ? window.getComputedStyle(element) : null;
+    var fit = computed ? String(computed.objectFit || 'fill').toLowerCase() : 'fill';
+    var offsetX = 0;
+    var offsetY = 0;
+    var contentWidth = rect.width;
+    var contentHeight = rect.height;
+    if (fit === 'contain' || fit === 'cover' || fit === 'scale-down') {
+      var uniform = fit === 'cover' ? Math.max(scaleX, scaleY) : Math.min(scaleX, scaleY);
+      if (fit === 'scale-down') uniform = Math.min(1, uniform);
+      scaleX = uniform;
+      scaleY = uniform;
+      contentWidth = sourceWidth * uniform;
+      contentHeight = sourceHeight * uniform;
+      var positions = String(computed && computed.objectPosition || '50% 50%').split(/\s+/);
+      offsetX = parseRegionalPosition(positions[0], rect.width - contentWidth);
+      offsetY = parseRegionalPosition(positions[1] || positions[0], rect.height - contentHeight);
+    }
+    entry.masks.forEach(function(mask, index) {
+      var region = entry.regions[index];
+      if (!isRegionalBox(region) || !scaleX || !scaleY || fit === 'none') {
+        mask.style.setProperty('left', rect.left + 'px', 'important');
+        mask.style.setProperty('top', rect.top + 'px', 'important');
+        mask.style.setProperty('width', rect.width + 'px', 'important');
+        mask.style.setProperty('height', rect.height + 'px', 'important');
+        mask.style.setProperty('display', 'block', 'important');
+        return;
+      }
+      var left = rect.left + offsetX + Number(region[0]) * scaleX;
+      var top = rect.top + offsetY + Number(region[1]) * scaleY;
+      var right = left + Number(region[2]) * scaleX;
+      var bottom = top + Number(region[3]) * scaleY;
+      left = Math.max(rect.left, left);
+      top = Math.max(rect.top, top);
+      right = Math.min(rect.right, right);
+      bottom = Math.min(rect.bottom, bottom);
+      if (right <= left || bottom <= top) {
+        mask.style.setProperty('display', 'none', 'important');
+        return;
+      }
+      mask.style.setProperty('left', left + 'px', 'important');
+      mask.style.setProperty('top', top + 'px', 'important');
+      mask.style.setProperty('width', right - left + 'px', 'important');
+      mask.style.setProperty('height', bottom - top + 'px', 'important');
+      mask.style.setProperty('display', 'block', 'important');
+    });
+    return true;
+  }
+
+  function refreshRegionalFallbacks() {
+    for (var index = regionalFallbacks.length - 1; index >= 0; index--) {
+      if (!refreshRegionalFallback(regionalFallbacks[index])) {
+        clearRegionalFallback(regionalFallbacks[index].element);
+      }
+    }
+  }
+
+  function installRegionalFallbackListeners() {
+    if (regionalFallbackListenersInstalled) return;
+    regionalFallbackListenersInstalled = true;
+    window.addEventListener('scroll', refreshRegionalFallbacks, true);
+    window.addEventListener('resize', refreshRegionalFallbacks, true);
+    window.addEventListener('orientationchange', refreshRegionalFallbacks, true);
+  }
+
+  function clearRegionalFallback(element) {
+    var entry = regionalFallbackFor(element);
+    if (!entry) {
+      element.removeAttribute(DATA_REGIONAL_FALLBACK);
+      return;
+    }
+    entry.masks.forEach(function(mask) { mask.remove(); });
+    regionalFallbacks = regionalFallbacks.filter(function(item) { return item !== entry; });
+    element.removeAttribute(DATA_REGIONAL_FALLBACK);
+    if (!regionalFallbacks.length && regionalFallbackRoot) {
+      regionalFallbackRoot.remove();
+      regionalFallbackRoot = null;
+    }
+  }
+
+  function applyRegionalFallback(element, result) {
+    clearRegionalFallback(element);
+    var root = getRegionalFallbackRoot();
+    if (!root || !result || !Array.isArray(result.regions) || !result.regions.length) return false;
+    var masks = result.regions.map(function() {
+      var mask = document.createElement('div');
+      mask.setAttribute(DATA_REGIONAL_MASK, '1');
+      mask.style.setProperty('position', 'fixed', 'important');
+      mask.style.setProperty('pointer-events', 'none', 'important');
+      mask.style.setProperty('background', 'rgb(0, 0, 0)', 'important');
+      mask.style.setProperty('z-index', '2147483647', 'important');
+      root.appendChild(mask);
+      return mask;
+    });
+    var entry = {
+      element: element,
+      regions: result.regions,
+      width: result.width,
+      height: result.height,
+      masks: masks
+    };
+    regionalFallbacks.push(entry);
+    installRegionalFallbackListeners();
+    refreshRegionalFallback(entry);
+    return true;
+  }
+
+  function setRegionalFallbackRevealed(element, revealed) {
+    var entry = regionalFallbackFor(element);
+    if (!entry) return;
+    entry.masks.forEach(function(mask) {
+      mask.style.setProperty('display', revealed ? 'none' : 'block', 'important');
+    });
+  }
+
   function rememberOriginalStyle(element) {
     if (element.hasAttribute(DATA_ORIGINAL_STYLE)) return;
     var style = element.getAttribute('style');
@@ -218,8 +412,17 @@ object ContentProtectionBridge {
   }
 
   function setProtectedStyle(element, pending) {
+    clearRegionalFallback(element);
     var smart = smartDetector();
     if (smart && smart.clear) smart.clear(element);
+    element.removeAttribute(DATA_REGIONAL);
+    if (mediaKind(element) === 'video') {
+      restoreStyle(element);
+      element.setAttribute(DATA_PROTECTED, '1');
+      if (pending) element.setAttribute(DATA_PENDING, '1');
+      else element.removeAttribute(DATA_PENDING);
+      return;
+    }
     rememberOriginalStyle(element);
     var amount = currentConfig.blurAmount;
     var filter = amount > 0 ? 'blur(' + amount + 'px)' : 'none';
@@ -232,6 +435,7 @@ object ContentProtectionBridge {
   }
 
   function clearProtectedStyle(element) {
+    clearRegionalFallback(element);
     var smart = smartDetector();
     if (smart && smart.clear) smart.clear(element);
     restoreStyle(element);
@@ -241,6 +445,21 @@ object ContentProtectionBridge {
     element.removeAttribute(DATA_REGIONAL);
   }
 
+  function setPendingProtection(element) {
+    if (mediaKind(element) !== 'video') {
+      setProtectedStyle(element, true);
+      return;
+    }
+    clearRegionalFallback(element);
+    var smart = smartDetector();
+    if (smart && smart.clear) smart.clear(element);
+    restoreStyle(element);
+    element.removeAttribute(DATA_REGIONAL);
+    element.removeAttribute(DATA_REVEALED);
+    element.setAttribute(DATA_PROTECTED, '1');
+    element.setAttribute(DATA_PENDING, '1');
+  }
+
   function finishSmartProcess(element, result) {
     if (!result || result.pending || !document.documentElement.contains(element)) return;
     if (!shouldProcess(element) || isWhitelisted()) {
@@ -248,20 +467,45 @@ object ContentProtectionBridge {
       return;
     }
     var smart = smartDetector();
-    if (result.ready && result.regions && result.regions.length && smart && smart.apply &&
-       smart.apply(element, currentConfig, result)) {
-       restoreStyle(element);
-       element.setAttribute(DATA_PROTECTED, '1');
-       element.setAttribute(DATA_REGIONAL, '1');
-       element.removeAttribute(DATA_REVEALED);
-       element.removeAttribute(DATA_PENDING);
-       return;
+    var hasRegions = result.ready && result.regions && result.regions.length;
+    if (hasRegions) {
+      clearRegionalFallback(element);
+      var regionalApplied = false;
+      if (smart && smart.apply) {
+        try {
+          regionalApplied = smart.apply(element, currentConfig, result);
+        } catch (_) {
+          regionalApplied = false;
+        }
+      }
+      if (regionalApplied) {
+        restoreStyle(element);
+        element.setAttribute(DATA_PROTECTED, '1');
+        element.setAttribute(DATA_REGIONAL, '1');
+        element.removeAttribute(DATA_REGIONAL_FALLBACK);
+        element.removeAttribute(DATA_REVEALED);
+        element.removeAttribute(DATA_PENDING);
+        return;
+      }
+      if (smart && smart.clear) smart.clear(element);
+      if (applyRegionalFallback(element, result)) {
+        restoreStyle(element);
+        element.setAttribute(DATA_PROTECTED, '1');
+        element.setAttribute(DATA_REGIONAL, '1');
+        element.setAttribute(DATA_REGIONAL_FALLBACK, '1');
+        element.removeAttribute(DATA_REVEALED);
+        element.removeAttribute(DATA_PENDING);
+        return;
+      }
+      setProtectedStyle(element, false);
+      return;
     }
     if (smart && smart.clear) smart.clear(element);
+    clearRegionalFallback(element);
     element.removeAttribute(DATA_REGIONAL);
-   var metadataBlocked = !result.ready && classify(element).blur;
+    var metadataBlocked = !result.ready && classify(element).blur;
     var unknownAtStrictness = result.unknownGender && currentConfig.strictness >= 0.75;
-     if (metadataBlocked || unknownAtStrictness) setProtectedStyle(element, false);
+    if (metadataBlocked || unknownAtStrictness) setProtectedStyle(element, false);
     else clearProtectedStyle(element);
   }
 
@@ -272,15 +516,20 @@ object ContentProtectionBridge {
       if (!currentConfig.hoverReveal || !element.hasAttribute(DATA_PROTECTED)) return;
       element.setAttribute(DATA_REVEALED, '1');
       var smart = smartDetector();
-      if (element.hasAttribute(DATA_REGIONAL) && smart && smart.setRevealed) smart.setRevealed(element, true);
-      else element.style.setProperty('filter', 'none', 'important');
+      if (element.hasAttribute(DATA_REGIONAL_FALLBACK)) setRegionalFallbackRevealed(element, true);
+      else if (element.hasAttribute(DATA_REGIONAL) && smart && smart.setRevealed) smart.setRevealed(element, true);
+      else if (!element.hasAttribute(DATA_PENDING)) element.style.setProperty('filter', 'none', 'important');
     }, true);
     element.addEventListener('pointerleave', function() {
       if (!element.hasAttribute(DATA_REVEALED)) return;
       element.removeAttribute(DATA_REVEALED);
       var smart = smartDetector();
-      if (element.hasAttribute(DATA_REGIONAL) && smart && smart.setRevealed) smart.setRevealed(element, false);
-      else if (element.hasAttribute(DATA_PROTECTED)) setProtectedStyle(element, false);
+      if (element.hasAttribute(DATA_REGIONAL_FALLBACK)) setRegionalFallbackRevealed(element, false);
+      else if (element.hasAttribute(DATA_REGIONAL) && smart && smart.setRevealed) smart.setRevealed(element, false);
+      else if (element.hasAttribute(DATA_PROTECTED)) {
+        if (element.hasAttribute(DATA_PENDING)) setPendingProtection(element);
+        else setProtectedStyle(element, false);
+      }
     }, true);
   }
 
@@ -291,17 +540,26 @@ object ContentProtectionBridge {
     }
     addHoverReveal(element);
     var kind = mediaKind(element);
+    if (kind === 'img' && !isVisible(element)) {
+      element.removeAttribute(DATA_PENDING);
+      if (!element.hasAttribute(DATA_REGIONAL)) clearProtectedStyle(element);
+      return;
+    }
+    if (kind === 'video' && !isVideoActive(element)) {
+      element.removeAttribute(DATA_PENDING);
+      return;
+    }
     var loading = (kind === 'img' && !element.complete) ||
       (kind === 'video' && element.readyState < 2);
     var smart = smartDetector();
     if (smart && smart.analyze) {
-      if (currentConfig.startupBlur) setProtectedStyle(element, true);
+      if (currentConfig.startupBlur) setPendingProtection(element);
       smart.analyze(element, currentConfig, function(result) {
         finishSmartProcess(element, result);
       });
       return;
     }
-    if (loading && currentConfig.startupBlur) setProtectedStyle(element, true);
+    if (loading && currentConfig.startupBlur) setPendingProtection(element);
     var result = classify(element);
     if (result.blur) setProtectedStyle(element, false);
     else if (!(loading && currentConfig.startupBlur)) clearProtectedStyle(element);
@@ -319,7 +577,19 @@ object ContentProtectionBridge {
     }
     var scope = root && root.querySelectorAll ? root : document;
     scope.querySelectorAll('img,video').forEach(function(element) { elements.push(element); });
-    elements.forEach(process);
+    elements.forEach(function(element) {
+      if (visibilityObserver) visibilityObserver.observe(element);
+      process(element);
+    });
+  }
+
+  function ensureVisibilityObserver() {
+    if (visibilityObserver || typeof IntersectionObserver !== 'function') return;
+    visibilityObserver = new IntersectionObserver(function(entries) {
+      entries.forEach(function(entry) {
+        if (entry.isIntersecting) process(entry.target);
+      });
+    });
   }
 
   function update(value) {
@@ -332,6 +602,7 @@ object ContentProtectionBridge {
   }, true);
   window[KEY] = { update: update };
   currentConfig = normalizeConfig(currentConfig);
+  ensureVisibilityObserver();
   scan(document);
   if (!observer && document.documentElement) {
     observer = new MutationObserver(function(records) {
@@ -341,7 +612,7 @@ object ContentProtectionBridge {
     });
     observer.observe(document.documentElement, { childList: true, subtree: true });
   }
-  if (!scanTimer) scanTimer = window.setInterval(function() { scan(document); }, 1500);
+  if (!scanTimer) scanTimer = window.setInterval(function() { scan(document); }, 2000);
 })();
 """
 }

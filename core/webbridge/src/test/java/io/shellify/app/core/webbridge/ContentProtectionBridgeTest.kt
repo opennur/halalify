@@ -43,6 +43,39 @@ class ContentProtectionBridgeTest {
     }
 
     @Test
+    fun `document start script only installs one top-level bridge`() {
+        val script = ContentProtectionBridge.buildDocumentStartScript(ContentProtectionSettings())
+
+        assertTrue(script.contains("window.top !== window.self"))
+        assertTrue(script.contains("if (window[KEY])"))
+        assertTrue(script.contains("window[KEY].update(initialConfig)"))
+        assertTrue(script.contains("regionalFallbackListenersInstalled"))
+    }
+
+    @Test
+    fun `regional detection keeps a mask fallback when regional blur is unavailable`() {
+        val script = ContentProtectionBridge.buildDocumentStartScript(ContentProtectionSettings())
+
+        assertTrue(script.contains("applyRegionalFallback(element, result)"))
+        assertTrue(script.contains("DATA_REGIONAL_MASK"))
+        assertTrue(script.contains("DATA_REGIONAL_FALLBACK"))
+        assertTrue(script.contains("background', 'rgb(0, 0, 0)"))
+        assertTrue(script.contains("setRegionalFallbackRevealed"))
+        assertFalse(script.contains("if (hasRegions) clearProtectedStyle(element)"))
+    }
+
+    @Test
+    fun `pending videos are not given a full filter`() {
+        val script = ContentProtectionBridge.buildDocumentStartScript(ContentProtectionSettings())
+
+        assertTrue(script.contains("if (mediaKind(element) !== 'video')"))
+        assertTrue(script.contains("element.setAttribute(DATA_PENDING, '1')"))
+        assertTrue(script.contains("if (currentConfig.startupBlur) setPendingProtection(element)"))
+        assertFalse(script.contains("if (currentConfig.startupBlur) setProtectedStyle(element, true)"))
+        assertFalse(script.contains("if (loading && currentConfig.startupBlur) setProtectedStyle(element, true)"))
+    }
+
+    @Test
     fun `maximum strictness keeps unknown media protected after loading`() {
         val script = ContentProtectionBridge.buildDocumentStartScript(
             ContentProtectionSettings(strictness = 1f)
